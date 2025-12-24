@@ -9,10 +9,11 @@ const DesktopView: React.FC = () => {
   const qrRef = useRef<HTMLDivElement>(null);
   const [peer, setPeer] = useState<any>(null);
   const [myId, setMyId] = useState<string>("");
-  const [conn, setConn] = useState<any>(null);
+  const [mobileConn, setMobileConn] = useState<any>(null);
+  const [bridgeConn, setBridgeConn] = useState<any>(null);
+  const [bridgeId, setBridgeId] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [bridgeConnected, setBridgeConnected] = useState(false);
-  const [lastCommand, setLastCommand] = useState<string>("Ready...");
+  const [lastCommand, setLastCommand] = useState<string>("Waiting for connections...");
 
   useEffect(() => {
     const newPeer = new Peer();
@@ -23,12 +24,26 @@ const DesktopView: React.FC = () => {
     });
 
     newPeer.on('connection', (connection: any) => {
-      setConn(connection);
+      // التحقق مما إذا كان المتصل هو الموبايل
+      setMobileConn(connection);
+      setLastCommand("Mobile Connected!");
       connection.on('data', (data: SyncMessage) => handleIncomingData(data));
     });
 
     return () => newPeer.destroy();
   }, []);
+
+  const connectToBridge = () => {
+    if (!peer || !bridgeId) return;
+    const conn = peer.connect(bridgeId);
+    conn.on('open', () => {
+      setBridgeConn(conn);
+      setLastCommand("Link established with Windows OS Bridge!");
+    });
+    conn.on('error', (err: any) => {
+      setLastCommand("Bridge Connection Failed. Check ID.");
+    });
+  };
 
   const generateQRCode = (id: string) => {
     if (qrRef.current) {
@@ -43,13 +58,12 @@ const DesktopView: React.FC = () => {
   const handleIncomingData = (msg: SyncMessage) => {
     if (msg.type === 'COMMAND') {
       const cmd = msg.payload as RemoteCommand;
-      setLastCommand(`${cmd.type}: ${JSON.stringify(cmd.payload)}`);
+      setLastCommand(`Relaying: ${cmd.type}`);
       
-      // Send to local bridge if needed (via WebSocket)
-      // This is where the magic happens when running the local script
-    }
-    if (msg.type === 'BRIDGE_STATUS') {
-      setBridgeConnected(msg.payload);
+      // التمرير الفعلي للجسر
+      if (bridgeConn && bridgeConn.open) {
+        bridgeConn.send(msg);
+      }
     }
   };
 
@@ -58,8 +72,8 @@ const DesktopView: React.FC = () => {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { cursor: "always", frameRate: 60 } as any
       });
-      if (conn && peer) {
-        peer.call(conn.peer, stream);
+      if (mobileConn && peer) {
+        peer.call(mobileConn.peer, stream);
         setIsStreaming(true);
       }
     } catch (err) { console.error(err); }
@@ -67,45 +81,71 @@ const DesktopView: React.FC = () => {
 
   return (
     <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 font-sans">
-      <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-8 h-full max-h-[800px]">
-        {/* Left Side: Connection & Instructions */}
-        <div className="bg-slate-900/50 border border-slate-800 rounded-[3rem] p-10 flex flex-col justify-center items-center text-center space-y-6">
-          <h2 className="text-3xl font-black text-white tracking-tight">SYSTEM BRIDGE</h2>
-          <div className="bg-white p-4 rounded-3xl shadow-[0_0_50px_rgba(59,130,246,0.2)]" ref={qrRef}></div>
-          <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 w-full flex justify-between items-center">
-            <span className="text-[10px] text-slate-500 font-bold uppercase">ID</span>
-            <span className="text-blue-400 font-mono font-bold">{myId || "..."}</span>
+      <div className="w-full max-w-6xl grid grid-cols-1 md:grid-cols-2 gap-8 h-full max-h-[850px]">
+        
+        {/* Mobile Link Panel */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-[3rem] p-10 flex flex-col items-center text-center space-y-6">
+          <div className="space-y-1">
+            <h2 className="text-3xl font-black text-white tracking-tight uppercase">1. Mobile Link</h2>
+            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Scan to connect controller</p>
           </div>
-          <div className={`px-6 py-2 rounded-full text-[10px] font-black uppercase ${bridgeConnected ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'}`}>
-            {bridgeConnected ? '● REAL OS CONTROL ACTIVE' : '○ BROWSER ONLY MODE'}
+          
+          <div className="bg-white p-4 rounded-3xl shadow-[0_0_50px_rgba(59,130,246,0.1)]" ref={qrRef}></div>
+          
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 w-full flex justify-between items-center">
+            <span className="text-[10px] text-slate-500 font-bold uppercase">Public ID</span>
+            <span className="text-blue-400 font-mono font-bold text-sm">{myId || "Generating..."}</span>
           </div>
+
+          <button onClick={startScreenShare} className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-xl shadow-blue-900/20">
+            {isStreaming ? 'STREAMING ACTIVE' : 'BROADCAST SCREEN'}
+          </button>
         </div>
 
-        {/* Right Side: Status & Control */}
-        <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 flex flex-col space-y-6">
-           <div className="flex-1 bg-slate-950 rounded-[2rem] border border-slate-800 p-6 relative overflow-hidden">
-              <div className="absolute top-4 left-4 flex items-center gap-2">
-                 <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                 <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Live Signals</span>
-              </div>
-              <div className="h-full flex flex-col items-center justify-center text-center">
-                 <i className={`fas ${isStreaming ? 'fa-video text-blue-500' : 'fa-desktop text-slate-800'} text-6xl mb-4`}></i>
-                 <p className="text-slate-400 font-mono text-sm max-w-[200px] break-all">{lastCommand}</p>
-              </div>
+        {/* Windows OS Bridge Panel */}
+        <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-10 flex flex-col space-y-8">
+           <div className="space-y-1 text-center">
+              <h2 className="text-3xl font-black text-white tracking-tight uppercase">2. OS Bridge</h2>
+              <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Connect to your terminal script</p>
            </div>
 
-           <div className="space-y-3">
-              <button onClick={startScreenShare} className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase tracking-widest transition-all">
-                {isStreaming ? 'STREAMING ACTIVE' : 'START SCREEN SHARE'}
+           <div className="space-y-4">
+              <div className="relative">
+                <input 
+                  type="text" 
+                  placeholder="Paste Bridge ID from Terminal" 
+                  className="w-full bg-slate-950 border border-slate-800 p-5 rounded-2xl text-center font-mono text-emerald-400 focus:border-emerald-500/50 outline-none"
+                  value={bridgeId}
+                  onChange={(e) => setBridgeId(e.target.value)}
+                />
+                {bridgeConn?.open && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>}
+              </div>
+
+              <button 
+                onClick={connectToBridge}
+                className={`w-full py-5 rounded-2xl font-black uppercase text-xs tracking-widest transition-all ${bridgeConn?.open ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                {bridgeConn?.open ? 'BRIDGE CONNECTED' : 'LINK TO TERMINAL BRIDGE'}
               </button>
-              <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700/50">
-                 <p className="text-[10px] text-slate-400 leading-relaxed font-medium">
-                   <i className="fas fa-info-circle mr-2"></i>
-                   To control Windows apps (Start, Chrome, Games), you must run the <b>Desktop Bridge</b> script on this PC.
-                 </p>
+           </div>
+
+           <div className="flex-1 bg-slate-950 rounded-[2rem] border border-slate-800/50 p-6 flex flex-col items-center justify-center text-center space-y-4">
+              <div className="p-4 bg-slate-900 rounded-full border border-slate-800">
+                <i className={`fas ${bridgeConn?.open ? 'fa-bolt text-emerald-500' : 'fa-terminal text-slate-700'} text-3xl`}></i>
+              </div>
+              <div className="space-y-1">
+                <p className="text-slate-500 text-[10px] font-black uppercase tracking-tighter">Current Signal Status</p>
+                <p className="text-white font-mono text-xs">{lastCommand}</p>
               </div>
            </div>
+
+           <div className="p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10">
+              <p className="text-[10px] text-blue-400/70 leading-relaxed text-center italic">
+                The terminal ID usually starts with "REAL_OS_BRIDGE_..."
+              </p>
+           </div>
         </div>
+
       </div>
     </div>
   );
