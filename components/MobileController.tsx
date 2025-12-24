@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { SyncMessage, RemoteCommand } from '../types';
+import { SyncMessage, RemoteCommand, StrokePoint } from '../types';
 
 declare var Peer: any;
 
@@ -10,13 +10,18 @@ interface MobileControllerProps {
 
 const MobileController: React.FC<MobileControllerProps> = ({ initialPeerId }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const trackpadRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  
   const [peer, setPeer] = useState<any>(null);
   const [conn, setConn] = useState<any>(null);
-  const [targetId, setTargetId] = useState(initialPeerId || "");
   const [isConnected, setIsConnected] = useState(false);
-  const [hasStream, setHasStream] = useState(false);
-  const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
+  const [targetId, setTargetId] = useState(initialPeerId || "");
+  
+  // Settings
+  const [color, setColor] = useState('#3b82f6');
+  const [brushSize, setBrushSize] = useState(5);
+  const [mode, setMode] = useState<'mouse' | 'draw'>('mouse');
+  const [lastTap, setLastTap] = useState(0);
 
   useEffect(() => {
     const newPeer = new Peer();
@@ -27,7 +32,7 @@ const MobileController: React.FC<MobileControllerProps> = ({ initialPeerId }) =>
     newPeer.on('call', (call: any) => {
       call.answer();
       call.on('stream', (stream: MediaStream) => {
-        if (videoRef.current) { videoRef.current.srcObject = stream; setHasStream(true); }
+        if (videoRef.current) videoRef.current.srcObject = stream;
       });
     });
     return () => newPeer.destroy();
@@ -36,91 +41,119 @@ const MobileController: React.FC<MobileControllerProps> = ({ initialPeerId }) =>
   const connectTo = (id: string, p: any = peer) => {
     const connection = p.connect(id);
     connection.on('open', () => { setConn(connection); setIsConnected(true); });
-    connection.on('close', () => setIsConnected(false));
   };
 
-  const sendCommand = (type: RemoteCommand['type'], payload: any = {}) => {
-    if (conn) conn.send({ type: 'COMMAND', payload: { type, payload } });
-  };
+  const handlePointer = (e: React.PointerEvent) => {
+    if (!conn || !containerRef.current) return;
 
-  const handlePointerDown = (e: React.PointerEvent) => {
-    setLastPos({ x: e.clientX, y: e.clientY });
-  };
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isConnected || e.buttons !== 1) return;
-    
-    // Calculate Delta (Relative movement)
-    const dx = (e.clientX - lastPos.x);
-    const dy = (e.clientY - lastPos.y);
-    
-    if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-      sendCommand('MOUSE_MOVE_RELATIVE', { dx, dy });
-      setLastPos({ x: e.clientX, y: e.clientY });
+    // Direct Mapping to Mouse
+    conn.send({ 
+      type: 'COMMAND', 
+      payload: { type: 'MOUSE_MOVE_ABS', payload: { x, y } } 
+    });
+
+    if (mode === 'draw' && (e.buttons === 1 || e.pointerType === 'pen')) {
+      const stroke: StrokePoint = { x, y, pressure: e.pressure || 0.5, color, size: brushSize, isDrawing: e.type !== 'pointerdown' };
+      conn.send({ type: 'STROKE', payload: stroke });
     }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      // Double Tap -> Right Click
+      conn?.send({ type: 'COMMAND', payload: { type: 'MOUSE_RCLICK' } });
+    } else {
+      // Single Tap -> Left Click
+      conn?.send({ type: 'COMMAND', payload: { type: 'MOUSE_CLICK' } });
+    }
+    setLastTap(now);
   };
 
   if (!isConnected) {
     return (
-      <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center p-10">
-        <div className="w-full max-w-sm space-y-8">
-           <div className="text-center">
-             <h2 className="text-3xl font-black text-white italic">REMOTE PAD</h2>
-             <p className="text-slate-500 text-sm">Link with Host ID to control OS</p>
-           </div>
-           <input type="text" placeholder="SERVER ID" className="w-full bg-slate-900 border border-slate-800 p-6 rounded-3xl text-center text-2xl font-mono text-blue-400 uppercase" value={targetId} onChange={(e) => setTargetId(e.target.value.toUpperCase())} />
-           <button onClick={() => connectTo(targetId)} className="w-full bg-blue-600 py-6 rounded-3xl font-black uppercase text-white shadow-2xl">Connect Device</button>
-        </div>
+      <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center p-8 space-y-6">
+        <h1 className="text-4xl font-black text-white italic tracking-tighter">PAIR DEVICE</h1>
+        <input 
+          type="text" 
+          placeholder="ENTER HOST ID" 
+          className="w-full max-w-xs bg-slate-900 border border-slate-800 p-6 rounded-3xl text-center text-blue-400 font-mono"
+          value={targetId}
+          onChange={(e) => setTargetId(e.target.value.toUpperCase())}
+        />
+        <button onClick={() => connectTo(targetId)} className="w-full max-w-xs bg-blue-600 py-6 rounded-3xl font-black text-white uppercase tracking-widest shadow-2xl">Start Session</button>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-black flex flex-col font-sans select-none overflow-hidden touch-none">
-      {/* Stream Display */}
-      <div className="h-[35vh] relative bg-slate-950 border-b border-slate-800">
-         <video ref={videoRef} autoPlay playsInline className={`w-full h-full object-contain ${hasStream ? 'opacity-100' : 'opacity-10'}`} />
-         {!hasStream && (
-           <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-[10px] text-slate-700 font-black tracking-[0.3em] uppercase italic">Visualizing Remote...</span>
-           </div>
-         )}
-      </div>
-
-      {/* Trackpad Area */}
+    <div className="fixed inset-0 bg-black flex flex-col overflow-hidden touch-none select-none">
+      {/* Main Slate Area */}
       <div 
-        ref={trackpadRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        className="flex-1 bg-slate-900/50 m-4 rounded-[3rem] border-2 border-slate-800/50 flex flex-col items-center justify-center active:border-blue-500/30 transition-colors"
+        ref={containerRef}
+        onPointerDown={handlePointer}
+        onPointerMove={handlePointer}
+        onTouchStart={handleTouchStart}
+        className="relative flex-1 bg-slate-900 cursor-crosshair"
       >
-         <div className="text-slate-800 font-black uppercase tracking-[1em] text-[10px] mb-8 pointer-events-none">Trackpad Surface</div>
-         
-         {/* Mouse Buttons Bar */}
-         <div className="absolute bottom-10 left-10 right-10 h-24 flex gap-4">
-            <button 
-              onPointerDown={(e) => { e.stopPropagation(); sendCommand('MOUSE_CLICK'); }} 
-              className="flex-1 bg-slate-800 rounded-3xl active:bg-blue-600 flex flex-col items-center justify-center gap-2"
-            >
-               <i className="fas fa-mouse-pointer text-slate-500"></i>
-               <span className="text-[8px] font-black uppercase text-slate-400">Left Click</span>
-            </button>
-            <button 
-              onPointerDown={(e) => { e.stopPropagation(); sendCommand('MOUSE_RCLICK'); }} 
-              className="flex-1 bg-slate-800 rounded-3xl active:bg-purple-600 flex flex-col items-center justify-center gap-2"
-            >
-               <i className="fas fa-ellipsis-v text-slate-500"></i>
-               <span className="text-[8px] font-black uppercase text-slate-400">Right Click</span>
-            </button>
-         </div>
+        <video ref={videoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover opacity-60 pointer-events-none" />
+        
+        {/* Mode Indicator */}
+        <div className="absolute top-6 left-6 px-4 py-2 bg-black/50 backdrop-blur-md rounded-full border border-white/10 text-[10px] text-white font-black uppercase tracking-widest">
+          Mode: {mode}
+        </div>
       </div>
 
-      {/* Keyboard Trigger */}
-      <div className="p-4 pt-0 h-20">
-         <button onClick={() => { const t = prompt("Input:"); if(t) sendCommand('KEY_PRESS', t); }} className="w-full h-full bg-slate-800 rounded-2xl flex items-center justify-center gap-4 text-slate-400 font-black uppercase text-[10px] tracking-widest">
-            <i className="fas fa-keyboard text-blue-500"></i>
-            Open System Keyboard
-         </button>
+      {/* Floating Pro Toolbar */}
+      <div className="absolute bottom-10 left-6 right-6 h-20 bg-slate-900/90 backdrop-blur-2xl border border-white/10 rounded-[2.5rem] flex items-center px-4 gap-4 shadow-2xl">
+        <button 
+          onClick={() => setMode(mode === 'mouse' ? 'draw' : 'mouse')}
+          className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl transition-all ${mode === 'draw' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-500'}`}
+        >
+          <i className={`fas ${mode === 'draw' ? 'fa-pen-nib' : 'fa-mouse-pointer'}`}></i>
+        </button>
+
+        <div className="h-8 w-px bg-white/10 mx-2"></div>
+
+        {/* Colors */}
+        <div className="flex-1 flex gap-3 overflow-x-auto no-scrollbar">
+           {['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#ffffff', '#000000'].map(c => (
+             <button 
+                key={c}
+                onClick={() => { setColor(c); setMode('draw'); }}
+                className={`min-w-[40px] h-10 rounded-xl border-2 transition-transform active:scale-90 ${color === c ? 'border-white scale-110' : 'border-transparent'}`}
+                style={{ backgroundColor: c }}
+             />
+           ))}
+        </div>
+
+        <div className="h-8 w-px bg-white/10 mx-2"></div>
+
+        {/* Actions */}
+        <button onClick={() => conn?.send({ type: 'CLEAR' })} className="w-12 h-12 bg-slate-800 rounded-2xl text-slate-400 hover:text-white">
+          <i className="fas fa-trash-alt"></i>
+        </button>
+        <button onClick={() => { const t = prompt("Text:"); if(t) conn?.send({ type: 'COMMAND', payload: { type: 'KEY_PRESS', payload: t } }); }} className="w-12 h-12 bg-blue-600/20 text-blue-400 rounded-2xl">
+          <i className="fas fa-keyboard"></i>
+        </button>
+      </div>
+
+      {/* Brush Size Slider (Vertical) */}
+      <div className="absolute right-6 top-1/2 -translate-y-1/2 w-12 bg-slate-900/80 backdrop-blur-lg rounded-full border border-white/10 p-2 flex flex-col items-center gap-4 py-6">
+         <span className="text-[8px] font-black text-slate-500 uppercase">Size</span>
+         <input 
+           type="range" 
+           min="1" max="50" 
+           value={brushSize} 
+           onChange={(e) => setBrushSize(parseInt(e.target.value))}
+           className="h-40 accent-blue-500" 
+           style={{ appearance: 'slider-vertical' } as any}
+         />
+         <span className="text-[10px] font-mono text-white">{brushSize}</span>
       </div>
     </div>
   );
