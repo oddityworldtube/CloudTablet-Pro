@@ -1,13 +1,21 @@
 
 export type DeviceRole = 'desktop' | 'mobile';
-export type ControlMode = 'remote_desktop' | 'graphics_tablet';
 
 export interface RemoteCommand {
-  type: 'MOUSE_MOVE' | 'MOUSE_MOVE_RELATIVE' | 'MOUSE_CLICK' | 'MOUSE_RCLICK' | 'MOUSE_WHEEL' | 'KEY_PRESS' | 'SHORTCUT';
+  type: 'MOUSE_MOVE_ABS' | 'MOUSE_CLICK' | 'MOUSE_RCLICK' | 'MOUSE_DOWN' | 'MOUSE_UP' | 'KEY_PRESS' | 'SCROLL';
   payload: any;
 }
 
+export interface StrokePoint {
+  x: number;
+  y: number;
+  pressure: number;
+  color: string;
+  size: number;
+  isDrawing: boolean;
+}
+
 export interface SyncMessage {
-  type: 'COMMAND' | 'STROKE' | 'SETTINGS' | 'CLEAR' | 'UNDO' | 'TEXT_POST' | 'BRIDGE_STATUS';
+  type: 'COMMAND' | 'STROKE' | 'CLEAR' | 'UNDO' | 'SYNC_SCREEN_SIZE';
   payload?: any;
 }
