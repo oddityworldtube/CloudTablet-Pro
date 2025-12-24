@@ -10,12 +10,34 @@ const DesktopView: React.FC = () => {
   const [peer, setPeer] = useState<any>(null);
   const [myId, setMyId] = useState<string>("");
   const [mobileConn, setMobileConn] = useState<any>(null);
-  const [bridgeConn, setBridgeConn] = useState<any>(null);
-  const [bridgeId, setBridgeId] = useState<string>("");
+  const [ws, setWs] = useState<WebSocket | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [lastCommand, setLastCommand] = useState<string>("Waiting for connections...");
+  const [bridgeStatus, setBridgeStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [lastCommand, setLastCommand] = useState<string>("Ready for connection...");
+
+  // 1. إعداد الـ WebSocket للربط مع الجسر المحلي (Node.js)
+  const connectToLocalBridge = () => {
+    setBridgeStatus('connecting');
+    const socket = new WebSocket('ws://localhost:8080');
+
+    socket.onopen = () => {
+      setBridgeStatus('connected');
+      setLastCommand("SYSTEM BRIDGE ACTIVE: Control is LIVE");
+    };
+
+    socket.onclose = () => {
+      setBridgeStatus('disconnected');
+      setTimeout(connectToLocalBridge, 3000); // إعادة محاولة الاتصال تلقائياً
+    };
+
+    socket.onerror = () => setBridgeStatus('disconnected');
+    setWs(socket);
+  };
 
   useEffect(() => {
+    // الاتصال بالجسر فور فتح الصفحة
+    connectToLocalBridge();
+
     const newPeer = new Peer();
     newPeer.on('open', (id: string) => {
       setMyId(id);
@@ -24,26 +46,24 @@ const DesktopView: React.FC = () => {
     });
 
     newPeer.on('connection', (connection: any) => {
-      // التحقق مما إذا كان المتصل هو الموبايل
       setMobileConn(connection);
-      setLastCommand("Mobile Connected!");
-      connection.on('data', (data: SyncMessage) => handleIncomingData(data));
+      setLastCommand("Mobile Device Paired!");
+      connection.on('data', (data: SyncMessage) => {
+        if (data.type === 'COMMAND') {
+          setLastCommand(`Executing: ${data.payload.type}`);
+          // إرسال الأمر فوراً للجسر عبر WebSocket
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(data.payload));
+          }
+        }
+      });
     });
 
-    return () => newPeer.destroy();
-  }, []);
-
-  const connectToBridge = () => {
-    if (!peer || !bridgeId) return;
-    const conn = peer.connect(bridgeId);
-    conn.on('open', () => {
-      setBridgeConn(conn);
-      setLastCommand("Link established with Windows OS Bridge!");
-    });
-    conn.on('error', (err: any) => {
-      setLastCommand("Bridge Connection Failed. Check ID.");
-    });
-  };
+    return () => {
+      newPeer.destroy();
+      ws?.close();
+    };
+  }, [ws?.readyState]);
 
   const generateQRCode = (id: string) => {
     if (qrRef.current) {
@@ -52,18 +72,6 @@ const DesktopView: React.FC = () => {
         text: `${window.location.origin}${window.location.pathname}?join=${id}`,
         width: 180, height: 180, colorDark: "#ffffff", colorLight: "#0f172a"
       });
-    }
-  };
-
-  const handleIncomingData = (msg: SyncMessage) => {
-    if (msg.type === 'COMMAND') {
-      const cmd = msg.payload as RemoteCommand;
-      setLastCommand(`Relaying: ${cmd.type}`);
-      
-      // التمرير الفعلي للجسر
-      if (bridgeConn && bridgeConn.open) {
-        bridgeConn.send(msg);
-      }
     }
   };
 
@@ -83,66 +91,65 @@ const DesktopView: React.FC = () => {
     <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 font-sans">
       <div className="w-full max-w-6xl grid grid-cols-1 md:grid-cols-2 gap-8 h-full max-h-[850px]">
         
-        {/* Mobile Link Panel */}
+        {/* Mobile Connection */}
         <div className="bg-slate-900/50 border border-slate-800 rounded-[3rem] p-10 flex flex-col items-center text-center space-y-6">
           <div className="space-y-1">
-            <h2 className="text-3xl font-black text-white tracking-tight uppercase">1. Mobile Link</h2>
-            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Scan to connect controller</p>
+            <h2 className="text-3xl font-black text-white tracking-tight uppercase italic">1. Device Pairing</h2>
+            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em]">Scan with your mobile</p>
           </div>
           
-          <div className="bg-white p-4 rounded-3xl shadow-[0_0_50px_rgba(59,130,246,0.1)]" ref={qrRef}></div>
+          <div className="bg-white p-4 rounded-3xl shadow-[0_0_60px_rgba(59,130,246,0.15)]" ref={qrRef}></div>
           
-          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 w-full flex justify-between items-center">
-            <span className="text-[10px] text-slate-500 font-bold uppercase">Public ID</span>
-            <span className="text-blue-400 font-mono font-bold text-sm">{myId || "Generating..."}</span>
+          <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 w-full">
+            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Peer ID</p>
+            <p className="text-blue-400 font-mono font-bold">{myId || "---"}</p>
           </div>
 
-          <button onClick={startScreenShare} className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-xl shadow-blue-900/20">
-            {isStreaming ? 'STREAMING ACTIVE' : 'BROADCAST SCREEN'}
+          <button onClick={startScreenShare} className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">
+            {isStreaming ? 'STREAMING ACTIVE' : 'START FULL BROADCAST'}
           </button>
         </div>
 
-        {/* Windows OS Bridge Panel */}
+        {/* Windows OS Bridge Status */}
         <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-10 flex flex-col space-y-8">
            <div className="space-y-1 text-center">
-              <h2 className="text-3xl font-black text-white tracking-tight uppercase">2. OS Bridge</h2>
-              <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Connect to your terminal script</p>
+              <h2 className="text-3xl font-black text-white tracking-tight uppercase italic">2. OS Status</h2>
+              <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em]">Windows System Link</p>
            </div>
 
-           <div className="space-y-4">
-              <div className="relative">
-                <input 
-                  type="text" 
-                  placeholder="Paste Bridge ID from Terminal" 
-                  className="w-full bg-slate-950 border border-slate-800 p-5 rounded-2xl text-center font-mono text-emerald-400 focus:border-emerald-500/50 outline-none"
-                  value={bridgeId}
-                  onChange={(e) => setBridgeId(e.target.value)}
-                />
-                {bridgeConn?.open && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>}
+           <div className={`flex-1 rounded-[2.5rem] border-2 transition-all duration-500 flex flex-col items-center justify-center p-8 text-center space-y-6 ${bridgeStatus === 'connected' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-950 border-slate-800 animate-pulse'}`}>
+              <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl ${bridgeStatus === 'connected' ? 'bg-emerald-500 text-white shadow-[0_0_30px_rgba(16,185,129,0.4)]' : 'bg-slate-800 text-slate-600'}`}>
+                <i className={`fas ${bridgeStatus === 'connected' ? 'fa-check' : 'fa-link'}`}></i>
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className={`text-xl font-black uppercase italic ${bridgeStatus === 'connected' ? 'text-emerald-400' : 'text-slate-600'}`}>
+                  {bridgeStatus === 'connected' ? 'BRIDGE ACTIVE' : 'WAITING FOR NODE.JS'}
+                </h3>
+                <p className="text-slate-500 font-mono text-[10px] max-w-[200px] leading-relaxed">
+                  {lastCommand}
+                </p>
               </div>
 
-              <button 
-                onClick={connectToBridge}
-                className={`w-full py-5 rounded-2xl font-black uppercase text-xs tracking-widest transition-all ${bridgeConn?.open ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-              >
-                {bridgeConn?.open ? 'BRIDGE CONNECTED' : 'LINK TO TERMINAL BRIDGE'}
-              </button>
+              {bridgeStatus !== 'connected' && (
+                <div className="p-4 bg-orange-500/10 border border-orange-500/20 rounded-2xl">
+                   <p className="text-[9px] text-orange-400 font-bold uppercase leading-relaxed">
+                     <i className="fas fa-exclamation-triangle mr-2"></i>
+                     Ensure bridge.js is running in terminal
+                   </p>
+                </div>
+              )}
            </div>
 
-           <div className="flex-1 bg-slate-950 rounded-[2rem] border border-slate-800/50 p-6 flex flex-col items-center justify-center text-center space-y-4">
-              <div className="p-4 bg-slate-900 rounded-full border border-slate-800">
-                <i className={`fas ${bridgeConn?.open ? 'fa-bolt text-emerald-500' : 'fa-terminal text-slate-700'} text-3xl`}></i>
+           <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                <p className="text-[8px] text-slate-600 font-black uppercase mb-1">Latency</p>
+                <p className="text-emerald-500 font-mono text-xs">~2ms (Local)</p>
               </div>
-              <div className="space-y-1">
-                <p className="text-slate-500 text-[10px] font-black uppercase tracking-tighter">Current Signal Status</p>
-                <p className="text-white font-mono text-xs">{lastCommand}</p>
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                <p className="text-[8px] text-slate-600 font-black uppercase mb-1">Protocol</p>
+                <p className="text-blue-400 font-mono text-xs">WebSockets</p>
               </div>
-           </div>
-
-           <div className="p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10">
-              <p className="text-[10px] text-blue-400/70 leading-relaxed text-center italic">
-                The terminal ID usually starts with "REAL_OS_BRIDGE_..."
-              </p>
            </div>
         </div>
 
