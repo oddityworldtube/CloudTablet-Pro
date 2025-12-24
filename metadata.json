@@ -1,0 +1,7 @@
+{
+  "name": "CloudTablet Pro",
+  "description": "Transform your smartphone into a professional-grade wireless graphics tablet. Features real-time low-latency stroke synchronization and Gemini-powered sketch refinement.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
