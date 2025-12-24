@@ -10,11 +10,10 @@ const DesktopView: React.FC = () => {
   const qrRef = useRef<HTMLDivElement>(null);
   const [peer, setPeer] = useState<any>(null);
   const [myId, setMyId] = useState<string>("");
-  const [mobileConn, setMobileConn] = useState<any>(null);
+  const [mobilePeerId, setMobilePeerId] = useState<string | null>(null);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [bridgeStatus, setBridgeStatus] = useState<'disconnected' | 'connected'>('disconnected');
 
-  // إعداد الرسم
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -42,11 +41,12 @@ const DesktopView: React.FC = () => {
     const newPeer = new Peer();
     newPeer.on('open', (id: string) => {
       setMyId(id);
+      setPeer(newPeer);
       generateQRCode(id);
     });
 
     newPeer.on('connection', (connection: any) => {
-      setMobileConn(connection);
+      setMobilePeerId(connection.peer);
       connection.on('data', (data: SyncMessage) => {
         handleIncomingData(data);
       });
@@ -95,24 +95,39 @@ const DesktopView: React.FC = () => {
     }
   };
 
+  // الدالة السحرية لبث الشاشة للموبايل
   const startScreenShare = async () => {
+    if (!mobilePeerId || !peer) {
+      alert("Please connect your mobile first!");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: "always", frameRate: 60 } as any
+        video: { 
+          cursor: "always", 
+          frameRate: { ideal: 60, max: 60 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        } as any,
+        audio: false
       });
-      if (mobileConn) peer.call(mobileConn.peer, stream);
-    } catch (err) { console.error(err); }
+      
+      // إرسال البث للموبايل
+      peer.call(mobilePeerId, stream);
+      
+      // تنبيه في حالة توقف البث
+      stream.getVideoTracks()[0].onended = () => {
+        console.log("Screen share ended");
+      };
+    } catch (err) { 
+      console.error("Error sharing screen:", err); 
+    }
   };
 
   return (
     <div className="relative h-screen w-screen bg-slate-950 overflow-hidden font-sans">
-      {/* Drawing Overlay */}
-      <canvas 
-        ref={canvasRef} 
-        className="absolute inset-0 z-10 pointer-events-none"
-      />
+      <canvas ref={canvasRef} className="absolute inset-0 z-10 pointer-events-none" />
 
-      {/* Admin Panel (Semi-transparent) */}
       <div className="absolute top-6 left-6 z-20 flex gap-4">
         <div className="bg-slate-900/80 backdrop-blur-xl border border-white/10 p-6 rounded-[2rem] shadow-2xl flex items-center gap-6">
            <div ref={qrRef} className="bg-white p-2 rounded-xl"></div>
@@ -122,14 +137,19 @@ const DesktopView: React.FC = () => {
                 <div className={`w-2 h-2 rounded-full ${bridgeStatus === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
                 <span className="text-[10px] text-slate-400 font-bold uppercase">{bridgeStatus === 'connected' ? 'OS Link Active' : 'Bridge Offline'}</span>
               </div>
-              <button onClick={startScreenShare} className="mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black rounded-lg transition-all">MIRROR SCREEN</button>
+              <button 
+                onClick={startScreenShare} 
+                className={`mt-2 px-6 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${mobilePeerId ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
+              >
+                <i className="fas fa-tv mr-2"></i>
+                {mobilePeerId ? 'Mirror Desktop to Mobile' : 'Waiting for Mobile...'}
+              </button>
            </div>
         </div>
       </div>
       
-      {/* Background Guide */}
-      <div className="absolute inset-0 flex items-center justify-center opacity-10 pointer-events-none">
-         <i className="fas fa- lawsuit-alt text-[20vw] text-white"></i>
+      <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
+         <i className="fas fa-layer-group text-[30vw] text-white"></i>
       </div>
     </div>
   );
